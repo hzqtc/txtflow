@@ -15,7 +15,10 @@ import (
 	"github.com/google/shlex"
 )
 
-const helpText = "Enter - execute | Ctrl+X - exit and print command | Ctrl+C - exit"
+const (
+	helpTextEditMode = "Tab - switch focus | Esc - focus output | Enter - execute | Ctrl+X - exit and print command | Ctrl+C - exit"
+	helpTextViewMode = "Tab - switch focus | j/k/↑/↓ - scroll | PgUp/PgDown - next/prev page | g - top | G - bottom | Ctrl+X - exit and print command | Ctrl+C - exit"
+)
 
 // Define a consistent total horizontal margin for the entire app content area
 // 2 characters on left, 2 on right
@@ -31,6 +34,8 @@ var (
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#64FFDA")). // Modern aquamarine for output border
 			Padding(1, horizontalMargin)
+
+	outputFocusedStyle = outputStyle.Copy().BorderForeground(lipgloss.Color("#FFD580")) // Soft orange
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF5C5C")). // Brighter red for error text
@@ -116,7 +121,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
 	switch msg.Type {
 	case tea.KeyCtrlC: // Exit immediately
 		m.quitting = true
@@ -126,7 +130,7 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	case tea.KeyEnter: // Process command
-		if m.isProcessing {
+		if m.isProcessing || !m.textInput.Focused() {
 			return m, nil
 		}
 		m.errorMessage = ""
@@ -135,19 +139,40 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.textInput.Blur()
 		// Start the command processing in a goroutine
 		return m, runCommand(m.textInput.Value(), m.stdinContent)
-	default:
-		// Every other key goes to the input box
-		m.textInput, cmd = m.textInput.Update(msg)
-		// If input is cleared AND we are not currently processing a command,
-		// revert to showing original stdin content and clear error.
-		if m.textInput.Value() == "" && !m.isProcessing {
-			m.processedOutput = m.stdinContent
-			m.viewport.SetContent(m.processedOutput)
-			m.errorMessage = ""
-			m.err = nil
-			m = m.updateWindow()
+	case tea.KeyTab: // Switch focus between input and viewport
+		if m.textInput.Focused() {
+			m.textInput.Blur()
+		} else {
+			m.textInput.Focus()
 		}
-
+		return m, nil
+	case tea.KeyEsc: // Move focus to the output viewport
+		m.textInput.Blur()
+		return m, nil
+	default:
+		var cmd tea.Cmd
+		if m.textInput.Focused() {
+			// Every other key goes to the input box
+			m.textInput, cmd = m.textInput.Update(msg)
+			// If input is cleared AND we are not currently processing a command,
+			// revert to showing original stdin content and clear error.
+			if m.textInput.Value() == "" && !m.isProcessing {
+				m.processedOutput = m.stdinContent
+				m.viewport.SetContent(m.processedOutput)
+				m.errorMessage = ""
+				m.err = nil
+				m = m.updateWindow()
+			}
+		} else {
+			switch msg.String() {
+			case "g":
+				m.viewport.GotoTop()
+			case "G":
+				m.viewport.GotoBottom()
+			default:
+				m.viewport, cmd = m.viewport.Update(msg)
+			}
+		}
 		return m, cmd
 	}
 }
@@ -160,17 +185,23 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) model {
 }
 
 func (m model) updateWindow() model {
-	availableWidth := m.winWidth - horizontalMargin
-	if availableWidth < 0 { // Prevent negative width
+	availableWidth := m.winWidth - 2 // -2 for left and right margin
+	if availableWidth < 0 {          // Prevent negative width
 		availableWidth = 0
 	}
+
+	// Set component inner width
+	m.textInput.Width = availableWidth - horizontalMargin*2 - 2 // Additional -2 to account for the prompt '> '
+	m.viewport.Width = availableWidth - horizontalMargin*2
+
 	// Update all component to have the same outter width
 	inputStyle = inputStyle.Width(availableWidth)
 	outputStyle = outputStyle.Width(availableWidth)
+	outputFocusedStyle = outputFocusedStyle.Width(availableWidth)
 	errorStyle = errorStyle.Width(availableWidth)
 	helpStyle = helpStyle.Width(availableWidth)
 
-	// --- Vertical Height Calculations for all components ---
+	// Vertical Height Calculations for all components
 	inputBoxRendered := inputStyle.Render(m.textInput.View())
 	inputBoxHeight := lipgloss.Height(inputBoxRendered)
 
@@ -180,13 +211,13 @@ func (m model) updateWindow() model {
 		errorBoxHeight = lipgloss.Height(errorBoxRendered)
 	}
 
-	helpTextRendered := helpStyle.Render(helpText)
+	helpTextRendered := helpStyle.Render(helpTextEditMode)
 	helpTextHeight := lipgloss.Height(helpTextRendered)
 
 	// Gaps between elements
 	const (
 		gapAfterInput = 1
-		gapAfterError = 0 // Thought this should be 1 but somehow it should be 0
+		gapAfterError = 0 // Thought this should be 1 but somehow only 0 seems to work
 		gapBeforeHelp = 1
 	)
 
@@ -295,8 +326,13 @@ func (m model) View() string {
 	if m.errorMessage != "" {
 		sections = append(sections, errorStyle.Render(m.errorMessage))
 	}
-	sections = append(sections, outputStyle.Render(m.viewport.View()))
-	sections = append(sections, helpStyle.Render(helpText))
+	if m.textInput.Focused() {
+		sections = append(sections, outputStyle.Render(m.viewport.View()))
+		sections = append(sections, helpStyle.Render(helpTextEditMode))
+	} else {
+		sections = append(sections, outputFocusedStyle.Render(m.viewport.View()))
+		sections = append(sections, helpStyle.Render(helpTextViewMode))
+	}
 
 	// Combine all sections vertically, aligned to the left implicitly by JoinVertical
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
