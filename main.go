@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/bubbletea"
@@ -18,7 +19,7 @@ import (
 
 const (
 	helpTextEditMode = "Tab - switch focus | Esc - focus output | Enter - execute | Ctrl+X - exit and print | Ctrl+C - exit"
-	helpTextViewMode = "Tab - switch focus | g/G - vertical 0/max | Home/End - horizontal 0/max | Ctrl+X - exit and print | Ctrl+C - exit"
+	helpTextViewMode = "Tab - switch focus | g/G - vertical 0/max | Home/End - horizontal 0/max | y - copy result | Ctrl+X - exit and print | Ctrl+C - exit"
 )
 
 // Define a consistent total horizontal margin for the entire app content area
@@ -173,6 +174,11 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.viewport.SetXOffset(math.MaxInt64)
 			}
 			switch msg.String() {
+			case "y":
+				err := clipboard.WriteAll(m.processedOutput)
+				if err != nil {
+					m.errorMessage = fmt.Sprintf("Failed to copy to clipboard: %v", err)
+				}
 			case "g":
 				m.viewport.GotoTop()
 			case "G":
