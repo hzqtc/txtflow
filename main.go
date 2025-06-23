@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	helpTextEditMode = "Tab - switch focus | Esc - focus output | Enter - execute | Ctrl+X - exit and print | Ctrl+C - exit"
-	helpTextViewMode = "Tab - switch focus | g/G - vertical 0/max | Home/End - horizontal 0/max | y - copy result | Ctrl+X - exit and print | Ctrl+C - exit"
+	helpTextEditMode = "Tab - switch focus | Enter - execute | Ctrl+X - exit and print | Ctrl+C - exit"
+	helpTextViewMode = "Tab - switch focus | y - copy result | q - exit | Ctrl+X - exit and print | Ctrl+C - exit\n" +
+		"hjkl/←↑↓→ - scroll | u/d - scroll half page | f/b/PgUp/PgDown - scroll full page | g/G - vertical 0/max | Home/End - horizontal 0/max"
 )
 
 // Define a consistent total horizontal margin for the entire app content area
@@ -173,6 +174,9 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.viewport.SetXOffset(math.MaxInt64)
 			}
 			switch msg.String() {
+			case "q":
+				m.quitting = true
+				return m, tea.Quit
 			case "y":
 				err := clipboard.WriteAll(m.processedOutput)
 				if err != nil {
