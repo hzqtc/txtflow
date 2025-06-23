@@ -57,7 +57,6 @@ var (
 type commandResultMsg struct {
 	output       string
 	errorMessage string // Human-readable error message, if any
-	rawError     error  // The underlying Go error, for debugging
 }
 
 // model represents the state of our TUI application
@@ -71,7 +70,6 @@ type model struct {
 	quitting        bool   // Flag to indicate if the app is quitting
 	command         string // Stores the command entered when exiting with Ctrl+X
 	errorMessage    string // Stores the error message to display in the UI
-	err             error  // Stores the underlying Go error object (for internal use)
 	isProcessing    bool   // Flag to indicate if a command is currently being processed
 }
 
@@ -140,7 +138,6 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.errorMessage = ""
-		m.err = nil
 		m.isProcessing = true
 		m.textInput.Blur()
 		// Start the command processing in a goroutine
@@ -166,7 +163,6 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.processedOutput = m.stdinContent
 				m.viewport.SetContent(m.processedOutput)
 				m.errorMessage = ""
-				m.err = nil
 				m = m.updateWindow()
 			}
 		} else {
@@ -308,14 +304,12 @@ func (m model) handleCommandResultMsg(msg commandResultMsg) model {
 	m.isProcessing = false
 	m.textInput.Focus()
 
-	if msg.rawError != nil {
+	if msg.errorMessage != "" {
 		m.errorMessage = msg.errorMessage
-		m.err = msg.rawError
 		// processedOutput remains the same (last good state or stdin content)
 	} else {
 		m.processedOutput = msg.output
 		m.errorMessage = ""
-		m.err = nil
 	}
 	m.viewport.SetContent(m.processedOutput)
 	m.viewport.GotoTop()
@@ -330,7 +324,7 @@ func runCommand(cmdStr, stdinContent string) tea.Cmd {
 	return func() tea.Msg {
 		trimmedCmdStr := strings.TrimSpace(cmdStr)
 		if trimmedCmdStr == "" {
-			return commandResultMsg{output: stdinContent, errorMessage: "", rawError: nil}
+			return commandResultMsg{output: stdinContent, errorMessage: ""}
 		}
 
 		// Run commands one by one and pipe the previous command's output to next command's input
@@ -344,7 +338,6 @@ func runCommand(cmdStr, stdinContent string) tea.Cmd {
 				return commandResultMsg{
 					output:       "",
 					errorMessage: "Syntax error: missing command between pipes",
-					rawError:     nil,
 				}
 			}
 
@@ -353,7 +346,6 @@ func runCommand(cmdStr, stdinContent string) tea.Cmd {
 				return commandResultMsg{
 					output:       "",
 					errorMessage: fmt.Sprintf("Failed to parse command %s: %s", cmdSegment, err),
-					rawError:     err,
 				}
 			}
 			cmd := exec.Command(parts[0], parts[1:]...)
@@ -372,12 +364,12 @@ func runCommand(cmdStr, stdinContent string) tea.Cmd {
 				} else {
 					errMsg += err.Error() // Fallback to Go's error message if stderr is empty
 				}
-				return commandResultMsg{output: "", errorMessage: errMsg, rawError: err}
+				return commandResultMsg{output: "", errorMessage: errMsg}
 			}
 
 			lastOutput = output
 		}
-		return commandResultMsg{output: lastOutput.String(), errorMessage: "", rawError: nil}
+		return commandResultMsg{output: lastOutput.String(), errorMessage: ""}
 	}
 }
 
