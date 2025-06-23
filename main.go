@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"strings"
@@ -16,8 +17,8 @@ import (
 )
 
 const (
-	helpTextEditMode = "Tab - switch focus | Esc - focus output | Enter - execute | Ctrl+X - exit and print command | Ctrl+C - exit"
-	helpTextViewMode = "Tab - switch focus | j/k/↑/↓ - scroll | PgUp/PgDown - next/prev page | g - top | G - bottom | Ctrl+X - exit and print command | Ctrl+C - exit"
+	helpTextEditMode = "Tab - switch focus | Esc - focus output | Enter - execute | Ctrl+X - exit and print | Ctrl+C - exit"
+	helpTextViewMode = "Tab - switch focus | g/G - vertical 0/max | Home/End - horizontal 0/max | Ctrl+X - exit and print | Ctrl+C - exit"
 )
 
 // Define a consistent total horizontal margin for the entire app content area
@@ -79,6 +80,7 @@ func initModel() model {
 	ti.Width = 80 // Initial width, will be adjusted by WindowSizeMsg
 
 	vp := viewport.New(80, 20) // Initial width and height, will be adjusted
+	vp.SetHorizontalStep(10)   // Enable horizontal scroll in 10 incrementals
 
 	// Read stdin content
 	stdinBytes, err := io.ReadAll(os.Stdin)
@@ -164,6 +166,12 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m = m.updateWindow()
 			}
 		} else {
+			switch msg.Type {
+			case tea.KeyHome:
+				m.viewport.SetXOffset(0)
+			case tea.KeyEnd:
+				m.viewport.SetXOffset(math.MaxInt64)
+			}
 			switch msg.String() {
 			case "g":
 				m.viewport.GotoTop()
@@ -255,6 +263,7 @@ func (m model) handleCommandResultMsg(msg commandResultMsg) model {
 	}
 	m.viewport.SetContent(m.processedOutput)
 	m.viewport.GotoTop()
+	m.viewport.SetXOffset(0)
 
 	return m
 }
