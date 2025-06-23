@@ -27,21 +27,24 @@ const (
 const horizontalMargin = 2
 
 var (
+	roundedBorder = lipgloss.RoundedBorder()
+
 	inputStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
+			BorderStyle(roundedBorder).
 			BorderForeground(lipgloss.Color("#A072E3")). // Modern purple for input border
 			Padding(0, horizontalMargin)
 
 	outputStyle = lipgloss.NewStyle().
-			BorderStyle(lipgloss.RoundedBorder()).
+			BorderStyle(roundedBorder).
 			BorderForeground(lipgloss.Color("#64FFDA")). // Modern aquamarine for output border
 			Padding(1, horizontalMargin)
 
-	outputFocusedStyle = outputStyle.Copy().BorderForeground(lipgloss.Color("#FFD580")) // Soft orange
+	outputFocusedBorderColor = lipgloss.Color("#FFD580") // Soft orange
+	outputFocusedStyle       = outputStyle.Copy().BorderForeground(outputFocusedBorderColor)
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF5C5C")). // Brighter red for error text
-			BorderStyle(lipgloss.RoundedBorder()).
+			BorderStyle(roundedBorder).
 			BorderForeground(lipgloss.Color("#FF5C5C")). // Red border for error box
 			Padding(0, horizontalMargin)
 
@@ -210,8 +213,18 @@ func (m model) updateWindow() model {
 
 	// Update all component to have the same outter width
 	inputStyle = inputStyle.Width(availableWidth)
-	outputStyle = outputStyle.Width(availableWidth)
-	outputFocusedStyle = outputFocusedStyle.Width(availableWidth)
+	outputBorder := lipgloss.Border{
+		Top:         getBorderTopWithTitle(fmt.Sprintf("Output (%d lines)", countLines(m.processedOutput)), availableWidth-2),
+		Bottom:      roundedBorder.Bottom,
+		Left:        roundedBorder.Left,
+		Right:       roundedBorder.Right,
+		TopLeft:     roundedBorder.TopLeft,
+		TopRight:    roundedBorder.TopRight,
+		BottomLeft:  roundedBorder.BottomLeft,
+		BottomRight: roundedBorder.BottomRight,
+	}
+	outputStyle = outputStyle.BorderStyle(outputBorder).Width(availableWidth)
+	outputFocusedStyle = outputStyle.Copy().BorderForeground(outputFocusedBorderColor)
 	errorStyle = errorStyle.Width(availableWidth)
 	helpStyle = helpStyle.Width(availableWidth)
 
@@ -251,6 +264,43 @@ func (m model) updateWindow() model {
 	// Re-set content to re-flow text within new viewport dimensions if needed
 	m.viewport.SetContent(m.processedOutput)
 	return m
+}
+
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+
+	count := strings.Count(s, "\n")
+	// If the string doesn't end with a newline, add 1
+	if !strings.HasSuffix(s, "\n") {
+		count++
+	}
+
+	return count
+}
+
+// Build a custom border top for lipgloss that embeds a title in it
+func getBorderTopWithTitle(title string, width int) string {
+	const filler = "─"
+	const lead = 4
+
+	if width <= 0 {
+		return ""
+	} else if width <= len(title) {
+		return title[:width] // truncate if title too long
+	}
+
+	// Compute how many dashes go on each side
+	var left, right int
+	if width <= len(title)+lead {
+		left = 1
+	} else {
+		left = lead
+	}
+	right = width - len(title) - left
+
+	return strings.Repeat(filler, left) + title + strings.Repeat(filler, right)
 }
 
 // Handles results from the user entered command
