@@ -4,6 +4,8 @@
 
 `txtflow` is heavily insipred by [`up`](https://github.com/akavel/up) but built with [`bubbletea`](https://github.com/charmbracelet/bubbletea).
 
+![](https://raw.github.com/hzqtc/txtflow/master/demo.gif)
+
 ## Features
 
 -   **Interactive Command Input:** Enter shell commands in a text input field.
