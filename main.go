@@ -19,13 +19,16 @@ import (
 
 const (
 	helpTextEditMode = "Tab - switch focus | Enter - execute | Ctrl+X - exit and print | Ctrl+C - exit"
-	helpTextViewMode = "Tab - switch focus | y - copy result | q - exit | Ctrl+X - exit and print | Ctrl+C - exit\n" +
+	helpTextViewMode = "Tab - switch focus | y - copy result | l - toggle line number | q - exit | Ctrl+X - exit and print | Ctrl+C - exit\n" +
 		"hjkl/←↑↓→ - scroll | u/d - scroll half page | f/b/PgUp/PgDown - scroll full page | g/G - vertical 0/max | Home/End - horizontal 0/max"
 )
 
 // Define a consistent total horizontal margin for the entire app content area
 // 2 characters on left, 2 on right
-const horizontalMargin = 2
+const (
+	horizontalMargin     = 2
+	outputVerticalMargin = 1
+)
 
 var (
 	roundedBorder = lipgloss.RoundedBorder()
@@ -38,10 +41,12 @@ var (
 	outputStyle = lipgloss.NewStyle().
 			BorderStyle(roundedBorder).
 			BorderForeground(lipgloss.Color("#64FFDA")). // Modern aquamarine for output border
-			Padding(1, horizontalMargin)
+			Padding(outputVerticalMargin, horizontalMargin)
 
 	outputFocusedBorderColor = lipgloss.Color("#FFD580") // Soft orange
 	outputFocusedStyle       = outputStyle.Copy().BorderForeground(outputFocusedBorderColor)
+
+	lineNumberStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7F7F7F")) // subtle gray
 
 	errorStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#FF5C5C")). // Brighter red for error text
@@ -67,11 +72,13 @@ type model struct {
 	textInput       textinput.Model
 	viewport        viewport.Model
 	stdinContent    string // Content read from os.Stdin
-	processedOutput string // Result after processing stdinContent with commands (last successful or original)
+	rawOutput       string // Raw output after executing all commands
+	processedOutput string // Processed output, may contain line numbers
 	quitting        bool   // Flag to indicate if the app is quitting
 	command         string // Stores the command entered when exiting with Ctrl+X
 	errorMessage    string // Stores the error message to display in the UI
 	isProcessing    bool   // Flag to indicate if a command is currently being processed
+	showLineNumber  bool   // Flag to indicate whether adding line numbers to output
 }
 
 // initModel initializes the model with default values and reads stdin
@@ -95,14 +102,11 @@ func initModel() model {
 	}
 
 	m := model{
-		textInput:       ti,
-		viewport:        vp,
-		stdinContent:    stdinStr,
-		processedOutput: stdinStr, // Initial output is stdin content
+		textInput:    ti,
+		viewport:     vp,
+		stdinContent: stdinStr,
 	}
-
-	m.viewport.SetContent(m.processedOutput)
-
+	m.updateOutput(stdinStr) // Initial output is stdin content
 	return m
 }
 
@@ -111,62 +115,51 @@ func (m model) Init() tea.Cmd {
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		return m.handleKeyMsg(msg)
-
+		cmd = m.handleKeyMsg(msg)
 	case tea.WindowSizeMsg:
-		m = m.handleWindowSizeMsg(msg)
-
+		m.handleWindowSizeMsg(msg)
 	case commandResultMsg:
-		m = m.handleCommandResultMsg(msg)
-		m = m.updateWindow()
+		m.handleCommandResultMsg(msg)
+		m.updateWindow()
 	}
-	return m, nil
+	return m, cmd
 }
 
-func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	switch msg.Type {
 	case tea.KeyCtrlC: // Exit immediately
 		m.quitting = true
-		return m, tea.Quit
+		return tea.Quit
 	case tea.KeyCtrlX: // Exit and print command
 		m.command = m.textInput.Value()
 		m.quitting = true
-		return m, tea.Quit
+		return tea.Quit
 	case tea.KeyEnter: // Process command
 		if m.isProcessing || !m.textInput.Focused() {
-			return m, nil
+			return nil
 		}
 		m.errorMessage = ""
 		m.isProcessing = true
 		m.textInput.Blur()
 		// Start the command processing in a goroutine
-		return m, runCommand(m.textInput.Value(), m.stdinContent)
+		return runCommand(m.textInput.Value(), m.stdinContent)
 	case tea.KeyTab: // Switch focus between input and viewport
 		if m.textInput.Focused() {
 			m.textInput.Blur()
 		} else {
 			m.textInput.Focus()
 		}
-		return m, nil
-	case tea.KeyEsc: // Move focus to the output viewport
-		m.textInput.Blur()
-		return m, nil
+		return nil
 	default:
 		var cmd tea.Cmd
 		if m.textInput.Focused() {
 			// Every other key goes to the input box
 			m.textInput, cmd = m.textInput.Update(msg)
-			// If input is cleared AND we are not currently processing a command,
-			// revert to showing original stdin content and clear error.
-			if m.textInput.Value() == "" && !m.isProcessing {
-				m.processedOutput = m.stdinContent
-				m.viewport.SetContent(m.processedOutput)
-				m.errorMessage = ""
-				m = m.updateWindow()
-			}
 		} else {
+			// Handle keys on the view port
 			switch msg.Type {
 			case tea.KeyHome:
 				m.viewport.SetXOffset(0)
@@ -176,12 +169,15 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "q":
 				m.quitting = true
-				return m, tea.Quit
+				return tea.Quit
 			case "y":
-				err := clipboard.WriteAll(m.processedOutput)
+				err := clipboard.WriteAll(m.rawOutput)
 				if err != nil {
 					m.errorMessage = fmt.Sprintf("Failed to copy to clipboard: %v", err)
 				}
+			case "l":
+				m.showLineNumber = !m.showLineNumber
+				m.refreshOutput()
 			case "g":
 				m.viewport.GotoTop()
 			case "G":
@@ -190,18 +186,44 @@ func (m model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.viewport, cmd = m.viewport.Update(msg)
 			}
 		}
-		return m, cmd
+		return cmd
 	}
 }
 
-// handleWindowSizeMsg recalculates component layouts based on new window size.
-func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) model {
-	m.winWidth = msg.Width
-	m.winHeight = msg.Height
-	return m.updateWindow()
+func (m *model) updateOutput(output string) {
+	m.rawOutput = output
+	m.processedOutput = addLineNumbers(output)
+	m.refreshOutput()
 }
 
-func (m model) updateWindow() model {
+func (m *model) refreshOutput() {
+	if m.showLineNumber {
+		m.viewport.SetContent(m.processedOutput)
+	} else {
+		m.viewport.SetContent(m.rawOutput)
+	}
+}
+
+func addLineNumbers(content string) string {
+	lines := strings.Split(content, "\n")
+	width := len(fmt.Sprintf("%d", len(lines))) // width for alignment (e.g., 3 for up to 999)
+
+	var b strings.Builder
+	for i, line := range lines {
+		lineNum := lineNumberStyle.Render(fmt.Sprintf("%*d ", width, i+1))
+		b.WriteString(lineNum + line + "\n")
+	}
+	return b.String()
+}
+
+// handleWindowSizeMsg recalculates component layouts based on new window size.
+func (m *model) handleWindowSizeMsg(msg tea.WindowSizeMsg) {
+	m.winWidth = msg.Width
+	m.winHeight = msg.Height
+	m.updateWindow()
+}
+
+func (m *model) updateWindow() {
 	availableWidth := m.winWidth - 2 // -2 for left and right margin
 	if availableWidth < 0 {          // Prevent negative width
 		availableWidth = 0
@@ -214,7 +236,7 @@ func (m model) updateWindow() model {
 	// Update all component to have the same outter width
 	inputStyle = inputStyle.Width(availableWidth)
 	outputBorder := lipgloss.Border{
-		Top:         getBorderTopWithTitle(fmt.Sprintf("Output (%d lines)", countLines(m.processedOutput)), availableWidth-2),
+		Top:         getBorderTopWithTitle(fmt.Sprintf(" Output (%d lines) ", countLines(m.rawOutput)), availableWidth-2),
 		Bottom:      roundedBorder.Bottom,
 		Left:        roundedBorder.Left,
 		Right:       roundedBorder.Right,
@@ -262,8 +284,7 @@ func (m model) updateWindow() model {
 	m.viewport.Height = remainingHeight
 
 	// Re-set content to re-flow text within new viewport dimensions if needed
-	m.viewport.SetContent(m.processedOutput)
-	return m
+	m.refreshOutput()
 }
 
 func countLines(s string) int {
@@ -304,22 +325,18 @@ func getBorderTopWithTitle(title string, width int) string {
 }
 
 // Handles results from the user entered command
-func (m model) handleCommandResultMsg(msg commandResultMsg) model {
+func (m *model) handleCommandResultMsg(msg commandResultMsg) {
 	m.isProcessing = false
 	m.textInput.Focus()
 
 	if msg.errorMessage != "" {
 		m.errorMessage = msg.errorMessage
-		// processedOutput remains the same (last good state or stdin content)
+		// Output remains unchanged (last good state or stdin content)
 	} else {
-		m.processedOutput = msg.output
+		m.updateOutput(msg.output)
 		m.errorMessage = ""
 	}
-	m.viewport.SetContent(m.processedOutput)
 	m.viewport.GotoTop()
-	m.viewport.SetXOffset(0)
-
-	return m
 }
 
 // runCommand executes the user-entered command on the stdin content
