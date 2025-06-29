@@ -30,31 +30,35 @@ const (
 )
 
 var (
+	borderColor        = lipgloss.Color("#7F7F7F")
+	focusedBorderColor = lipgloss.Color("#FFD580")
+	errorColor         = lipgloss.Color("#FF5C5C")
+	helpColor          = lipgloss.Color("#7F7F7F")
+
 	roundedBorder = lipgloss.RoundedBorder()
 
 	inputStyle = lipgloss.NewStyle().
 			BorderStyle(roundedBorder).
-			BorderForeground(lipgloss.Color("#A072E3")). // Modern purple for input border
+			BorderForeground(borderColor).
 			Padding(0, horizontalMargin)
+	inputFocusedStyle = inputStyle.Copy().BorderForeground(focusedBorderColor)
 
 	outputStyle = lipgloss.NewStyle().
 			BorderStyle(roundedBorder).
-			BorderForeground(lipgloss.Color("#64FFDA")). // Modern aquamarine for output border
+			BorderForeground(borderColor).
 			Padding(outputVerticalMargin, horizontalMargin)
+	outputFocusedStyle = outputStyle.Copy().BorderForeground(focusedBorderColor)
 
-	outputFocusedBorderColor = lipgloss.Color("#FFD580") // Soft orange
-	outputFocusedStyle       = outputStyle.Copy().BorderForeground(outputFocusedBorderColor)
-
-	lineNumberStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7F7F7F")) // subtle gray
+	lineNumberStyle = lipgloss.NewStyle().Foreground(helpColor)
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF5C5C")). // Brighter red for error text
+			Foreground(errorColor).
 			BorderStyle(roundedBorder).
-			BorderForeground(lipgloss.Color("#FF5C5C")). // Red border for error box
+			BorderForeground(errorColor).
 			Padding(0, horizontalMargin)
 
 	helpStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#7F7F7F")). // Subtle grey for help text
+			Foreground(helpColor).
 			Padding(0, horizontalMargin)
 )
 
@@ -242,6 +246,8 @@ func (m *model) updateWindow() {
 
 	// Update all component to have the same outter width
 	inputStyle = inputStyle.Width(availableWidth)
+	inputFocusedStyle = inputFocusedStyle.Width(availableWidth)
+	// Embed text in top border of the output panel
 	outputBorder := lipgloss.Border{
 		Top:         getBorderTopWithTitle(fmt.Sprintf(" Output (%d lines) ", countLines(m.rawOutput)), availableWidth-2),
 		Bottom:      roundedBorder.Bottom,
@@ -253,7 +259,7 @@ func (m *model) updateWindow() {
 		BottomRight: roundedBorder.BottomRight,
 	}
 	outputStyle = outputStyle.BorderStyle(outputBorder).Width(availableWidth)
-	outputFocusedStyle = outputStyle.Copy().BorderForeground(outputFocusedBorderColor)
+	outputFocusedStyle = outputStyle.Copy().BorderForeground(focusedBorderColor)
 	errorStyle = errorStyle.Width(availableWidth)
 	helpStyle = helpStyle.Width(availableWidth)
 
@@ -385,19 +391,21 @@ func (m model) View() string {
 	}
 
 	var sections []string
-	sections = append(sections, inputStyle.Render(m.textInput.View()))
+	if m.textInput.Focused() {
+		sections = append(sections, inputFocusedStyle.Render(m.textInput.View()))
+	} else {
+		sections = append(sections, inputStyle.Render(m.textInput.View()))
+	}
 	if m.errorMessage != "" {
 		sections = append(sections, errorStyle.Render(m.errorMessage))
 	}
 	if m.textInput.Focused() {
 		sections = append(sections, outputStyle.Render(m.viewport.View()))
-		sections = append(sections, helpStyle.Render(helpTextEditMode))
 	} else {
 		sections = append(sections, outputFocusedStyle.Render(m.viewport.View()))
-		sections = append(sections, helpStyle.Render(helpTextViewMode))
 	}
+	sections = append(sections, helpStyle.Render(helpTextViewMode))
 
-	// Combine all sections vertically, aligned to the left implicitly by JoinVertical
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
