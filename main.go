@@ -14,7 +14,6 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/google/shlex"
 )
 
 const (
@@ -156,8 +155,16 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	default:
 		var cmd tea.Cmd
 		if m.textInput.Focused() {
-			// Every other key goes to the input box
-			m.textInput, cmd = m.textInput.Update(msg)
+			switch msg.Type {
+			case tea.KeyCtrlD:
+				if m.textInput.Value() == "" {
+					m.quitting = true
+					return tea.Quit
+				}
+			default:
+				// Every other key goes to the input box
+				m.textInput, cmd = m.textInput.Update(msg)
+			}
 		} else {
 			// Handle keys on the view port
 			switch msg.Type {
@@ -348,49 +355,27 @@ func runCommand(cmdStr, stdinContent string) tea.Cmd {
 			return commandResultMsg{output: stdinContent, errorMessage: ""}
 		}
 
-		// Run commands one by one and pipe the previous command's output to next command's input
-		commands := strings.Split(trimmedCmdStr, "|")
-		var lastOutput bytes.Buffer
-		lastOutput.WriteString(stdinContent)
+		cmd := exec.Command("sh", "-c", trimmedCmdStr)
 
-		for _, cmdSegment := range commands {
-			cmdSegment = strings.TrimSpace(cmdSegment)
-			if cmdSegment == "" {
-				return commandResultMsg{
-					output:       "",
-					errorMessage: "Syntax error: missing command between pipes",
-				}
+		cmd.Stdin = strings.NewReader(stdinContent)
+
+		var output bytes.Buffer
+		var stderr bytes.Buffer
+		cmd.Stdout = &output
+		cmd.Stderr = &stderr
+
+		err := cmd.Run()
+		if err != nil {
+			errMsg := fmt.Sprintf("Error: Command '%s' failed. ", cmdStr)
+			if stderr.Len() > 0 {
+				errMsg += strings.TrimSpace(stderr.String())
+			} else {
+				errMsg += err.Error()
 			}
-
-			parts, err := shlex.Split(cmdSegment)
-			if err != nil || len(parts) == 0 {
-				return commandResultMsg{
-					output:       "",
-					errorMessage: fmt.Sprintf("Failed to parse command %s: %s", cmdSegment, err),
-				}
-			}
-			cmd := exec.Command(parts[0], parts[1:]...)
-			cmd.Stdin = &lastOutput
-
-			var output bytes.Buffer
-			var stderr bytes.Buffer
-			cmd.Stdout = &output
-			cmd.Stderr = &stderr
-
-			err = cmd.Run()
-			if err != nil {
-				errMsg := fmt.Sprintf("Error: Command '%s' failed. ", cmdSegment)
-				if stderr.Len() > 0 {
-					errMsg += strings.TrimSpace(stderr.String())
-				} else {
-					errMsg += err.Error() // Fallback to Go's error message if stderr is empty
-				}
-				return commandResultMsg{output: "", errorMessage: errMsg}
-			}
-
-			lastOutput = output
+			return commandResultMsg{output: "", errorMessage: errMsg}
 		}
-		return commandResultMsg{output: lastOutput.String(), errorMessage: ""}
+
+		return commandResultMsg{output: output.String(), errorMessage: ""}
 	}
 }
 

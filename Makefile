@@ -16,10 +16,13 @@ run: build
 fmt:
 	gofmt -w -s $(SRC)
 
+vet:
+	go vet $(SRC)
+
 clean:
 	rm -f $(BINARY_NAME)
 
 install: build
 	GOBIN=$(GOBIN) go install
 
-.PHONY: all build run clean install
+.PHONY: all build run clean install fmt vet
