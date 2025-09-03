@@ -1,9 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
-	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -69,6 +69,11 @@ type commandResultMsg struct {
 	errorMessage string // Human-readable error message, if any
 }
 
+type stdinMsg struct {
+	ch   chan stdinMsg
+	line string
+}
+
 // model represents the state of our TUI application
 type model struct {
 	winWidth        int
@@ -81,7 +86,6 @@ type model struct {
 	quitting        bool   // Flag to indicate if the app is quitting
 	command         string // Stores the command entered when exiting with Ctrl+X
 	errorMessage    string // Stores the error message to display in the UI
-	isProcessing    bool   // Flag to indicate if a command is currently being processed
 	showLineNumber  bool   // Flag to indicate whether adding line numbers to output
 }
 
@@ -96,26 +100,44 @@ func initModel() model {
 	vp := viewport.New(80, 20) // Initial width and height, will be adjusted
 	vp.SetHorizontalStep(10)   // Enable horizontal scroll in 10 incrementals
 
-	// Read stdin content
-	stdinBytes, err := io.ReadAll(os.Stdin)
-	var stdinStr string
-	if err != nil {
-		stdinStr = fmt.Sprintf("Error reading stdin: %v", err)
-	} else {
-		stdinStr = string(stdinBytes)
-	}
-
 	m := model{
 		textInput:    ti,
 		viewport:     vp,
-		stdinContent: stdinStr,
+		stdinContent: "",
 	}
-	m.updateOutput(stdinStr) // Initial output is stdin content
 	return m
 }
 
 func (m model) Init() tea.Cmd {
-	return nil
+	stdinCh := make(chan stdinMsg)
+	go func() {
+		m.readStdin(stdinCh)
+	}()
+	return streamStdin(stdinCh)
+}
+
+func streamStdin(ch chan stdinMsg) tea.Cmd {
+	return func() tea.Msg {
+		return <-ch
+	}
+}
+
+func (m *model) readStdin(ch chan stdinMsg) {
+	// Check if stdin is a character device (terminal) and not a pipe or file.
+	// If it's a terminal, we don't want to block the TUI startup waiting for stdin.
+	// We assume that if the user is running interactively, they will use the textinput.
+	if info, err := os.Stdin.Stat(); err != nil || info.Mode()&os.ModeCharDevice == os.ModeCharDevice {
+		close(ch)
+		return
+	}
+
+	// If stdin is not a terminal (e.g., piped input or redirected from a file),
+	// then proceed to read its content.
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		ch <- stdinMsg{ch, scanner.Text()}
+	}
+	close(ch)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -125,6 +147,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd = m.handleKeyMsg(msg)
 	case tea.WindowSizeMsg:
 		m.handleWindowSizeMsg(msg)
+	case stdinMsg:
+		if msg.line != "" && msg.ch != nil {
+			m.stdinContent += msg.line + "\n"
+			m.errorMessage = ""
+			cmd = tea.Batch(streamStdin(msg.ch), m.runCommand())
+		}
 	case commandResultMsg:
 		m.handleCommandResultMsg(msg)
 		m.updateWindow()
@@ -133,6 +161,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
+	var cmd tea.Cmd
 	switch msg.Type {
 	case tea.KeyCtrlC: // Exit immediately
 		m.quitting = true
@@ -141,27 +170,20 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 		m.command = m.textInput.Value()
 		m.quitting = true
 		return tea.Quit
-	case tea.KeyEnter: // Process command
-		if m.isProcessing || !m.textInput.Focused() {
-			return nil
-		}
-		m.errorMessage = ""
-		m.isProcessing = true
+	case tea.KeyEnter:
 		m.textInput.Blur()
-		// Start the command processing in a goroutine
-		return runCommand(m.textInput.Value(), m.stdinContent)
-	case tea.KeyTab: // Switch focus between input and viewport
+	case tea.KeyTab:
 		if m.textInput.Focused() {
 			m.textInput.Blur()
 		} else {
 			m.textInput.Focus()
 		}
-		return nil
 	default:
-		var cmd tea.Cmd
 		if m.textInput.Focused() {
 			// Every other key goes to the input box
-			m.textInput, cmd = m.textInput.Update(msg)
+			m.textInput, _ = m.textInput.Update(msg)
+			m.errorMessage = ""
+			cmd = m.runCommand()
 		} else {
 			// Handle keys on the view port
 			switch msg.Type {
@@ -190,8 +212,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 				m.viewport, cmd = m.viewport.Update(msg)
 			}
 		}
-		return cmd
 	}
+	return cmd
 }
 
 func (m *model) updateOutput(output string) {
@@ -329,9 +351,6 @@ func getBorderTopWithTitle(title string, width int) string {
 
 // Handles results from the user entered command
 func (m *model) handleCommandResultMsg(msg commandResultMsg) {
-	m.isProcessing = false
-	m.textInput.Focus()
-
 	if msg.errorMessage != "" {
 		m.errorMessage = msg.errorMessage
 		// Output remains unchanged (last good state or stdin content)
@@ -393,11 +412,11 @@ func parsePipedCommands(cmdStr string) ([]string, error) {
 
 // runCommand executes the user-entered command on the stdin content
 // in a separate goroutine and sends a commandResultMsg back.
-func runCommand(cmdStr, stdinContent string) tea.Cmd {
+func (m *model) runCommand() tea.Cmd {
 	return func() tea.Msg {
-		trimmedCmdStr := strings.TrimSpace(cmdStr)
+		trimmedCmdStr := strings.TrimSpace(m.textInput.Value())
 		if trimmedCmdStr == "" {
-			return commandResultMsg{output: stdinContent, errorMessage: ""}
+			return commandResultMsg{output: m.stdinContent, errorMessage: ""}
 		}
 
 		// Run commands one by one and pipe the previous command's output to next command's input
@@ -409,7 +428,7 @@ func runCommand(cmdStr, stdinContent string) tea.Cmd {
 			}
 		}
 		var lastOutput bytes.Buffer
-		lastOutput.WriteString(stdinContent)
+		lastOutput.WriteString(m.stdinContent)
 
 		for _, cmdSegment := range commands {
 			cmdSegment = strings.TrimSpace(cmdSegment)
