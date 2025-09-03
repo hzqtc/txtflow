@@ -19,7 +19,7 @@ import (
 
 const (
 	helpTextEditMode = "Tab - switch focus | Enter - execute | Ctrl+X - exit and print | Ctrl+C - exit"
-	helpTextViewMode = "Tab - switch focus | y - copy result | l - toggle line number | q - exit | Ctrl+X - exit and print | Ctrl+C - exit\n" +
+	helpTextViewMode = "Tab - switch focus | y - copy result | L - toggle line number | q - exit | Ctrl+X - exit and print | Ctrl+C - exit\n" +
 		"hjkl/←↑↓→ - scroll | u/d - scroll half page | f/b/PgUp/PgDown - scroll full page | g/G - vertical 0/max | Home/End - horizontal 0/max"
 )
 
@@ -179,7 +179,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 				if err != nil {
 					m.errorMessage = fmt.Sprintf("Failed to copy to clipboard: %v", err)
 				}
-			case "l":
+			case "L":
 				m.showLineNumber = !m.showLineNumber
 				m.refreshOutput()
 			case "g":
