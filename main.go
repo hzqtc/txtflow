@@ -217,8 +217,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 }
 
 func (m *model) updateOutput(output string) {
-	m.rawOutput = output
-	m.processedOutput = addLineNumbers(output)
+	m.rawOutput = strings.TrimSuffix(output, "\n")
+	m.processedOutput = addLineNumbers(m.rawOutput)
 	m.refreshOutput()
 }
 
