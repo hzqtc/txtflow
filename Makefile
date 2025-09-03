@@ -13,9 +13,6 @@ build: $(BINARY_NAME)
 run: build
 	./$(BINARY_NAME)
 
-fmt:
-	gofmt -w -s $(SRC)
-
 clean:
 	rm -f $(BINARY_NAME)
 
