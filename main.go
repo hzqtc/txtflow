@@ -12,7 +12,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/shlex"
 )
@@ -42,13 +42,13 @@ var (
 			BorderStyle(roundedBorder).
 			BorderForeground(borderColor).
 			Padding(0, horizontalMargin)
-	inputFocusedStyle = inputStyle.Copy().BorderForeground(focusedBorderColor)
+	inputFocusedStyle = inputStyle.BorderForeground(focusedBorderColor)
 
 	outputStyle = lipgloss.NewStyle().
 			BorderStyle(roundedBorder).
 			BorderForeground(borderColor).
 			Padding(outputVerticalMargin, horizontalMargin)
-	outputFocusedStyle = outputStyle.Copy().BorderForeground(focusedBorderColor)
+	outputFocusedStyle = outputStyle.BorderForeground(focusedBorderColor)
 
 	lineNumberStyle = lipgloss.NewStyle().Foreground(helpColor)
 
@@ -228,10 +228,7 @@ func (m *model) handleWindowSizeMsg(msg tea.WindowSizeMsg) {
 }
 
 func (m *model) updateWindow() {
-	availableWidth := m.winWidth - 2 // -2 for left and right margin
-	if availableWidth < 0 {          // Prevent negative width
-		availableWidth = 0
-	}
+	availableWidth := max(0, m.winWidth-2) // -2 for left and right margin
 
 	// Set component inner width
 	m.textInput.Width = availableWidth - horizontalMargin*2 - 2 // Additional -2 to account for the prompt '> '
@@ -252,7 +249,7 @@ func (m *model) updateWindow() {
 		BottomRight: roundedBorder.BottomRight,
 	}
 	outputStyle = outputStyle.BorderStyle(outputBorder).Width(availableWidth)
-	outputFocusedStyle = outputStyle.Copy().BorderForeground(focusedBorderColor)
+	outputFocusedStyle = outputStyle.BorderForeground(focusedBorderColor)
 	errorStyle = errorStyle.Width(availableWidth)
 	helpStyle = helpStyle.Width(availableWidth)
 
@@ -345,6 +342,55 @@ func (m *model) handleCommandResultMsg(msg commandResultMsg) {
 	m.viewport.GotoTop()
 }
 
+const (
+	emptyRune = '\x00'
+)
+
+// parsePipedCommands splits a command string by pipes, respecting quotes.
+func parsePipedCommands(cmdStr string) ([]string, error) {
+	var commands []string
+	var currentCommand strings.Builder
+	var openQuote rune
+
+	for _, r := range cmdStr {
+		switch r {
+		case '\'', '"', '`':
+			switch openQuote {
+			case emptyRune:
+				// Start quote
+				openQuote = r
+			case r:
+				// Close quote
+				openQuote = emptyRune
+			default:
+				return nil, fmt.Errorf("malformatted command string: mismatched quotes %c & %c", openQuote, r)
+			}
+			currentCommand.WriteRune(r)
+		case '|':
+			if openQuote == emptyRune {
+				// Not in a quoted string, | separates commands
+				commands = append(commands, strings.TrimSpace(currentCommand.String()))
+				currentCommand.Reset()
+			} else {
+				// Inside a quoted string, treat | as a normal rune in the command string
+				currentCommand.WriteRune(r)
+			}
+		default:
+			currentCommand.WriteRune(r)
+		}
+	}
+
+	if currentCommand.Len() > 0 {
+		commands = append(commands, strings.TrimSpace(currentCommand.String()))
+	}
+
+	if openQuote != emptyRune {
+		return nil, fmt.Errorf("malformatted command string: unclose quote %c", openQuote)
+	}
+
+	return commands, nil
+}
+
 // runCommand executes the user-entered command on the stdin content
 // in a separate goroutine and sends a commandResultMsg back.
 func runCommand(cmdStr, stdinContent string) tea.Cmd {
@@ -355,7 +401,13 @@ func runCommand(cmdStr, stdinContent string) tea.Cmd {
 		}
 
 		// Run commands one by one and pipe the previous command's output to next command's input
-		commands := strings.Split(trimmedCmdStr, "|")
+		commands, err := parsePipedCommands(trimmedCmdStr)
+		if err != nil {
+			return commandResultMsg{
+				output:       "",
+				errorMessage: err.Error(),
+			}
+		}
 		var lastOutput bytes.Buffer
 		lastOutput.WriteString(stdinContent)
 
