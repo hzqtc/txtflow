@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,7 +19,7 @@ import (
 )
 
 const (
-	helpTextEditMode = "Tab - switch focus | Enter - execute | Ctrl+X - exit and print | Ctrl+C - exit"
+	helpTextEditMode = "Tab - switch focus | Esc - clear | Ctrl+X - exit and print | Ctrl+C - exit"
 	helpTextViewMode = "Tab - switch focus | y - copy result | L - toggle line number | q - exit | Ctrl+X - exit and print | Ctrl+C - exit\n" +
 		"hjkl/←↑↓→ - scroll | u/d - scroll half page | f/b/PgUp/PgDown - scroll full page | g/G - vertical 0/max | Home/End - horizontal 0/max"
 )
@@ -87,6 +88,19 @@ type model struct {
 	command         string // Stores the command entered when exiting with Ctrl+X
 	errorMessage    string // Stores the error message to display in the UI
 	showLineNumber  bool   // Flag to indicate whether adding line numbers to output
+
+	forceExit       key.Binding
+	exitAndPrint    key.Binding
+	exit            key.Binding
+	enter           key.Binding
+	esc             key.Binding
+	tab             key.Binding
+	copyResult      key.Binding
+	toggleLineNum   key.Binding
+	scrollTop       key.Binding
+	scrollBottom    key.Binding
+	scrollBeginning key.Binding
+	scrollEnd       key.Binding
 }
 
 // initModel initializes the model with default values and reads stdin
@@ -104,6 +118,19 @@ func initModel() model {
 		textInput:    ti,
 		viewport:     vp,
 		stdinContent: "",
+
+		forceExit:       key.NewBinding(key.WithKeys("ctrl+c")),
+		exitAndPrint:    key.NewBinding(key.WithKeys("ctrl+x")),
+		exit:            key.NewBinding(key.WithKeys("q")),
+		enter:           key.NewBinding(key.WithKeys("enter")),
+		esc:             key.NewBinding(key.WithKeys("esc")),
+		tab:             key.NewBinding(key.WithKeys("tab")),
+		copyResult:      key.NewBinding(key.WithKeys("y")),
+		toggleLineNum:   key.NewBinding(key.WithKeys("L")),
+		scrollTop:       key.NewBinding(key.WithKeys("g")),
+		scrollBottom:    key.NewBinding(key.WithKeys("G")),
+		scrollBeginning: key.NewBinding(key.WithKeys("home")),
+		scrollEnd:       key.NewBinding(key.WithKeys("end")),
 	}
 	return m
 }
@@ -162,17 +189,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	var cmd tea.Cmd
-	switch msg.Type {
-	case tea.KeyCtrlC: // Exit immediately
+	switch {
+	case key.Matches(msg, m.forceExit):
 		m.quitting = true
 		return tea.Quit
-	case tea.KeyCtrlX: // Exit and print command
+	case key.Matches(msg, m.exitAndPrint):
 		m.command = m.textInput.Value()
 		m.quitting = true
 		return tea.Quit
-	case tea.KeyEnter:
+	case key.Matches(msg, m.enter):
 		m.textInput.Blur()
-	case tea.KeyTab:
+	case key.Matches(msg, m.esc):
+		m.textInput.SetValue("")
+		m.textInput.Blur()
+	case key.Matches(msg, m.tab):
 		if m.textInput.Focused() {
 			m.textInput.Blur()
 		} else {
@@ -186,28 +216,26 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 			cmd = m.runCommand()
 		} else {
 			// Handle keys on the view port
-			switch msg.Type {
-			case tea.KeyHome:
-				m.viewport.SetXOffset(0)
-			case tea.KeyEnd:
-				m.viewport.SetXOffset(math.MaxInt64)
-			}
-			switch msg.String() {
-			case "q":
+			switch {
+			case key.Matches(msg, m.exit):
 				m.quitting = true
 				return tea.Quit
-			case "y":
+			case key.Matches(msg, m.copyResult):
 				err := clipboard.WriteAll(m.rawOutput)
 				if err != nil {
 					m.errorMessage = fmt.Sprintf("Failed to copy to clipboard: %v", err)
 				}
-			case "L":
+			case key.Matches(msg, m.toggleLineNum):
 				m.showLineNumber = !m.showLineNumber
 				m.refreshOutput()
-			case "g":
+			case key.Matches(msg, m.scrollTop):
 				m.viewport.GotoTop()
-			case "G":
+			case key.Matches(msg, m.scrollBottom):
 				m.viewport.GotoBottom()
+			case key.Matches(msg, m.scrollBeginning):
+				m.viewport.SetXOffset(0)
+			case key.Matches(msg, m.scrollEnd):
+				m.viewport.SetXOffset(math.MaxInt64)
 			default:
 				m.viewport, cmd = m.viewport.Update(msg)
 			}
