@@ -24,9 +24,9 @@ const (
 		"hjkl/←↑↓→ - scroll | u/d - scroll half page | f/b/PgUp/PgDown - scroll full page | g/G - vertical 0/max | Home/End - horizontal 0/max"
 )
 
-// Define a consistent total horizontal margin for the entire app content area
-// 2 characters on left, 2 on right
 const (
+	stdinBufferSize = 16
+
 	horizontalMargin     = 2
 	outputVerticalMargin = 1
 )
@@ -64,23 +64,21 @@ var (
 			Padding(0, horizontalMargin)
 )
 
-// commandResultMsg is a message type sent when the command processing is done.
 type commandResultMsg struct {
 	output       string
-	errorMessage string // Human-readable error message, if any
+	errorMessage string
 }
 
 type stdinMsg struct {
-	ch   chan stdinMsg
 	line string
 }
 
-// model represents the state of our TUI application
 type model struct {
 	winWidth        int
 	winHeight       int
 	textInput       textinput.Model
 	viewport        viewport.Model
+	stdinCh         chan stdinMsg
 	stdinContent    string // Content read from os.Stdin
 	rawOutput       string // Raw output after executing all commands
 	processedOutput string // Processed output, may contain line numbers
@@ -103,21 +101,19 @@ type model struct {
 	scrollEnd       key.Binding
 }
 
-// initModel initializes the model with default values and reads stdin
 func initModel() model {
-	ti := textinput.New()
-	ti.Placeholder = "Enter commands (e.g., 'grep hello | wc -l')"
-	ti.Focus() // Set initial focus on the input box
-	ti.CharLimit = 256
-	ti.Width = 80 // Initial width, will be adjusted by WindowSizeMsg
+	input := textinput.New()
+	input.Prompt = "> "
+	input.Placeholder = "Enter commands (e.g., 'grep hello | wc -l')"
+	input.Focus()
 
-	vp := viewport.New(80, 20) // Initial width and height, will be adjusted
-	vp.SetHorizontalStep(10)   // Enable horizontal scroll in 10 incrementals
+	vp := viewport.New(0, 0) // Initial width and height, will be adjusted
+	vp.SetHorizontalStep(10) // Enable horizontal scroll in 10 incrementals
 
 	m := model{
-		textInput:    ti,
-		viewport:     vp,
-		stdinContent: "",
+		textInput: input,
+		viewport:  vp,
+		stdinCh:   make(chan stdinMsg, stdinBufferSize),
 
 		forceExit:       key.NewBinding(key.WithKeys("ctrl+c")),
 		exitAndPrint:    key.NewBinding(key.WithKeys("ctrl+x")),
@@ -136,25 +132,24 @@ func initModel() model {
 }
 
 func (m model) Init() tea.Cmd {
-	stdinCh := make(chan stdinMsg)
 	go func() {
-		m.readStdin(stdinCh)
+		m.readStdin()
 	}()
-	return streamStdin(stdinCh)
+	return m.pollStdin()
 }
 
-func streamStdin(ch chan stdinMsg) tea.Cmd {
+func (m *model) pollStdin() tea.Cmd {
 	return func() tea.Msg {
-		return <-ch
+		return <-m.stdinCh
 	}
 }
 
-func (m *model) readStdin(ch chan stdinMsg) {
+func (m *model) readStdin() {
 	// Check if stdin is a character device (terminal) and not a pipe or file.
 	// If it's a terminal, we don't want to block the TUI startup waiting for stdin.
 	// We assume that if the user is running interactively, they will use the textinput.
 	if info, err := os.Stdin.Stat(); err != nil || info.Mode()&os.ModeCharDevice == os.ModeCharDevice {
-		close(ch)
+		close(m.stdinCh)
 		return
 	}
 
@@ -162,9 +157,9 @@ func (m *model) readStdin(ch chan stdinMsg) {
 	// then proceed to read its content.
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
-		ch <- stdinMsg{ch, scanner.Text()}
+		m.stdinCh <- stdinMsg{line: scanner.Text()}
 	}
-	close(ch)
+	close(m.stdinCh)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -175,10 +170,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.handleWindowSizeMsg(msg)
 	case stdinMsg:
-		if msg.line != "" && msg.ch != nil {
+		if msg.line != "" {
 			m.stdinContent += msg.line + "\n"
 			m.errorMessage = ""
-			cmd = tea.Batch(streamStdin(msg.ch), m.runCommand())
+			cmd = tea.Batch(m.pollStdin(), m.runCommand())
 		}
 	case commandResultMsg:
 		m.handleCommandResultMsg(msg)
@@ -270,7 +265,6 @@ func addLineNumbers(content string) string {
 	return b.String()
 }
 
-// handleWindowSizeMsg recalculates component layouts based on new window size.
 func (m *model) handleWindowSizeMsg(msg tea.WindowSizeMsg) {
 	m.winWidth = msg.Width
 	m.winHeight = msg.Height
@@ -377,7 +371,6 @@ func getBorderTopWithTitle(title string, width int) string {
 	return strings.Repeat(filler, left) + title + strings.Repeat(filler, right)
 }
 
-// Handles results from the user entered command
 func (m *model) handleCommandResultMsg(msg commandResultMsg) {
 	if msg.errorMessage != "" {
 		m.errorMessage = msg.errorMessage
@@ -389,15 +382,13 @@ func (m *model) handleCommandResultMsg(msg commandResultMsg) {
 	m.viewport.GotoTop()
 }
 
-const (
-	emptyRune = '\x00'
-)
-
 // parsePipedCommands splits a command string by pipes, respecting quotes.
 func parsePipedCommands(cmdStr string) ([]string, error) {
 	var commands []string
 	var currentCommand strings.Builder
 	var openQuote rune
+
+	const emptyRune = '\x00'
 
 	for _, r := range cmdStr {
 		switch r {
