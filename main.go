@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -16,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/shlex"
+	"github.com/spf13/pflag"
 )
 
 const (
@@ -25,10 +27,13 @@ const (
 )
 
 const (
-	stdinBufferSize = 16
-
 	horizontalMargin     = 2
 	outputVerticalMargin = 1
+)
+
+var (
+	flagStdinBufferSize = pflag.Int32P("buffer", "b", 1024, "The buffer size for reading stdin")
+	flagShowHelp        = pflag.BoolP("help", "h", false, "Show help message")
 )
 
 var (
@@ -113,7 +118,7 @@ func initModel() model {
 	m := model{
 		textInput: input,
 		viewport:  vp,
-		stdinCh:   make(chan stdinMsg, stdinBufferSize),
+		stdinCh:   make(chan stdinMsg, *flagStdinBufferSize),
 
 		forceExit:       key.NewBinding(key.WithKeys("ctrl+c")),
 		exitAndPrint:    key.NewBinding(key.WithKeys("ctrl+x")),
@@ -155,9 +160,14 @@ func (m *model) readStdin() {
 
 	// If stdin is not a terminal (e.g., piped input or redirected from a file),
 	// then proceed to read its content.
-	scanner := bufio.NewScanner(os.Stdin)
-	for scanner.Scan() {
-		m.stdinCh <- stdinMsg{line: scanner.Text()}
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		} else {
+			m.stdinCh <- stdinMsg{line: line}
+		}
 	}
 	close(m.stdinCh)
 }
@@ -171,7 +181,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleWindowSizeMsg(msg)
 	case stdinMsg:
 		if msg.line != "" {
-			m.stdinContent += msg.line + "\n"
+			m.stdinContent += msg.line
+			// Batch process the next lines
+			for range *flagStdinBufferSize {
+				if len(m.stdinCh) == 0 {
+					break
+				}
+				msg := <-m.stdinCh
+				m.stdinContent += msg.line
+			}
 			m.errorMessage = ""
 			cmd = tea.Batch(m.pollStdin(), m.runCommand())
 		}
@@ -515,6 +533,20 @@ func (m model) View() string {
 }
 
 func main() {
+	pflag.Parse()
+
+	if *flagShowHelp {
+		pflag.Usage()
+		os.Exit(0)
+	}
+
+	f, err := os.OpenFile("/tmp/txtflow.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err == nil {
+		// Send log output to the file
+		log.SetOutput(f)
+		defer f.Close()
+	}
+
 	m := initModel()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := p.Run()
