@@ -215,6 +215,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	case key.Matches(msg, m.esc):
 		m.textInput.SetValue("")
 		m.textInput.Blur()
+		m.errorMessage = ""
+		cmd = m.runCommand()
 	case key.Matches(msg, m.tab):
 		if m.textInput.Focused() {
 			m.textInput.Blur()
@@ -224,9 +226,12 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) tea.Cmd {
 	default:
 		if m.textInput.Focused() {
 			// Every other key goes to the input box
+			prevValue := m.textInput.Value()
 			m.textInput, _ = m.textInput.Update(msg)
-			m.errorMessage = ""
-			cmd = m.runCommand()
+			if m.textInput.Value() != prevValue {
+				m.errorMessage = ""
+				cmd = m.runCommand()
+			}
 		} else {
 			// Handle keys on the view port
 			switch {
@@ -404,26 +409,21 @@ func (m *model) handleCommandResultMsg(msg commandResultMsg) {
 func parsePipedCommands(cmdStr string) ([]string, error) {
 	var commands []string
 	var currentCommand strings.Builder
-	var openQuote rune
-
-	const emptyRune = '\x00'
+	var openQuotes []rune // Stack of open quotes
 
 	for _, r := range cmdStr {
 		switch r {
 		case '\'', '"', '`':
-			switch openQuote {
-			case emptyRune:
-				// Start quote
-				openQuote = r
-			case r:
-				// Close quote
-				openQuote = emptyRune
-			default:
-				return nil, fmt.Errorf("malformatted command string: mismatched quotes %c & %c", openQuote, r)
+			if l := len(openQuotes); l > 0 && openQuotes[l-1] == r {
+				// Close last quote, pop it from openQuotes
+				openQuotes = openQuotes[:l-1]
+			} else {
+				// Start a new quote, Push to the end of openQuotes
+				openQuotes = append(openQuotes, r)
 			}
 			currentCommand.WriteRune(r)
 		case '|':
-			if openQuote == emptyRune {
+			if len(openQuotes) == 0 {
 				// Not in a quoted string, | separates commands
 				commands = append(commands, strings.TrimSpace(currentCommand.String()))
 				currentCommand.Reset()
@@ -440,8 +440,8 @@ func parsePipedCommands(cmdStr string) ([]string, error) {
 		commands = append(commands, strings.TrimSpace(currentCommand.String()))
 	}
 
-	if openQuote != emptyRune {
-		return nil, fmt.Errorf("malformatted command string: unclose quote %c", openQuote)
+	if len(openQuotes) > 0 {
+		return nil, fmt.Errorf("malformatted command string: unclose quote %c", openQuotes[0])
 	}
 
 	return commands, nil
